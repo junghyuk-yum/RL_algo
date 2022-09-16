@@ -1,14 +1,12 @@
 import argparse
 import gym
 import os
+import numpy as np
+import torch
 import matplotlib.pyplot as plt
 
 import BCQ
 import DDPG
-
-import numpy as np
-import torch
-
 
 class ReplayBuffer(object):
     def __init__(self, state_dim, action_dim, device, max_size=int(1e6)):
@@ -71,7 +69,7 @@ def interact_with_environment(env, state_dim, action_dim, max_action, device, ar
     buffer_name = f"{args.buffer_name}_{setting}"
 
     policy = DDPG.DDPG(state_dim, action_dim, max_action, device)
-    if args.generate_buffer and not(args.generate_buffer) : policy.load(f"./models/behavioral_{setting}")
+    if args.generate_buffer: policy.load(f"./models/behavioral_{setting}")
 
     replay_buffer = ReplayBuffer(state_dim, action_dim, device)
 
@@ -115,19 +113,13 @@ def interact_with_environment(env, state_dim, action_dim, max_action, device, ar
             episode_num += 1
 
         if args.train_behavioral and (t + 1) % args.eval_freq == 0:
-            print("Timestep " + str(t + 1) + " ", end="")
+            print("Train step " + str(t+1), end=', ')
             evaluations.append(eval_policy(policy, args.env, args.seed))
             np.save(f"./results/behavioral_{setting}", evaluations)
             policy.save(f"./models/behavioral_{setting}")
 
-    if args.train_behavioral and not(args.generate_buffer):
+    if args.train_behavioral:
         policy.save(f"./models/behavioral_{setting}")
-
-    elif args.train_behavioral and args.generate_buffer:
-        policy.save(f"./models/behavioral_{setting}")
-        evaluations.append(eval_policy(policy, args.env, args.seed))
-        np.save(f"./results/buffer_performance_{setting}", evaluations)
-        replay_buffer.save(f"./buffers/{buffer_name}")
 
     else:
         evaluations.append(eval_policy(policy, args.env, args.seed))
@@ -135,7 +127,6 @@ def interact_with_environment(env, state_dim, action_dim, max_action, device, ar
         replay_buffer.save(f"./buffers/{buffer_name}")
 
 def train_BCQ(state_dim, action_dim, max_action, device, args):
-
     setting = f"{args.env}_{args.seed}"
     buffer_name = f"{args.buffer_name}_{setting}"
 
@@ -156,6 +147,7 @@ def train_BCQ(state_dim, action_dim, max_action, device, args):
         np.save(f"./results/BCQ_{setting}", evaluations)
 
         training_iters += args.eval_freq
+        print(f"Training iterations: {training_iters}")
 
 def eval_policy(policy, env_name, seed, eval_episodes=10):
     eval_env = gym.make(env_name)
@@ -171,8 +163,9 @@ def eval_policy(policy, env_name, seed, eval_episodes=10):
 
     avg_reward /= eval_episodes
 
+
     print(f"Evaluation over {eval_episodes} episodes: {avg_reward:.3f}")
-    print("---------------------------------------------")
+    print("---------------------------------------")
     return avg_reward
 
 
@@ -200,10 +193,10 @@ if __name__ == "__main__":
     parser.add_argument("--generate_buffer", action="store_true")  # If true, generate buffer
     args = parser.parse_args()
 
-    args.max_timesteps = 1000000
+    args.env = "Hopper-v2"
     args.train_behavioral = True
-    args.gaussian_std = 0.1
-    args.generate_buffer = True
+    args.gaussian_std = 0.3
+    args.generate_buffer = False
 
     print("---------------------------------------")
     if args.train_behavioral:
@@ -214,6 +207,9 @@ if __name__ == "__main__":
         print(f"Setting: Training BCQ, Env: {args.env}, Seed: {args.seed}")
     print("---------------------------------------")
 
+    if args.train_behavioral and args.generate_buffer:
+        print("Train_behavioral and generate_buffer cannot both be true.")
+        exit()
 
     if not os.path.exists("./results"):
         os.makedirs("./results")
@@ -237,28 +233,36 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if args.train_behavioral and args.generate_buffer:
-        # Batch 2
-        interact_with_environment(env, state_dim, action_dim, max_action, device, args)
-        train_BCQ(state_dim, action_dim, max_action, args)
-    elif args.train_behavioral or args.generate_buffer:
-        # Batch 1 or Batch 3
+    if args.train_behavioral or args.generate_buffer:
         interact_with_environment(env, state_dim, action_dim, max_action, device, args)
     else:
-        # Batch 1 or Batch 3
         train_BCQ(state_dim, action_dim, max_action, device, args)
 
 
-setting = f"{args.env}_{args.seed}"
-avg_reward_ddpq = np.load(f"./results/behavioral_{setting}.npy")
-avg_reward_bcq = np.load((f"./results/BCQ_{setting}.npy"))
+if not args.train_behavioral and not args.generate_buffer:
 
-plt.plot(avg_reward_ddpq)
-plt.plot(avg_reward_bcq)
-plt.xlabel("Episode")
-plt.ylabel("Avg. Epsiodic Reward")
-plt.savefig('BCQ_score_history.png')
-plt.show()
-plt.close()
+    setting = f"{args.env}_{args.seed}"
+    reward_ddpq = np.load(f"./results/behavioral_{setting}.npy")
+    reward_bcq = np.load((f"./results/BCQ_{setting}.npy"))
+    avg_reward_ddpq = []
+    avg_reward_bcq = []
 
-env.close()
+    reward_sum = 0
+    for idx, data in enumerate(reward_ddpq):
+        reward_sum += data
+        avg_reward_ddpq.append(reward_sum / (idx+1))
+    reward_sum = 0
+    for idx, data in enumerate(reward_bcq):
+        reward_sum += data
+        avg_reward_bcq.append(reward_sum / (idx+1))
+
+    plt.plot(avg_reward_ddpq, label='DDPG')
+    plt.plot(avg_reward_bcq, label='BCQ')
+    plt.xlabel("Episode")
+    plt.ylabel("Avg. Epsiodic Reward")
+    plt.legend()
+    plt.savefig(f'BCQ_score_history_{args.envs}.png')
+    plt.show()
+    plt.close()
+
+    env.close()
